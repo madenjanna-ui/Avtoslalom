@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>MaDen AutoSlalom</title>
+<style>
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#08111f;font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#fff}
+  body{display:flex;justify-content:center}
+  #game{position:relative;width:min(100vw,520px);height:100dvh;overflow:hidden;background:#091522}
+  canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+  .hud{position:absolute;top:max(12px,env(safe-area-inset-top));left:12px;right:12px;display:flex;justify-content:space-between;align-items:center;pointer-events:none}
+  .pill{padding:9px 13px;border:1px solid rgba(255,255,255,.16);border-radius:18px;background:rgba(8,18,32,.5);backdrop-filter:blur(12px);box-shadow:0 8px 30px rgba(0,0,0,.18);font-weight:700}
+  .score{font-size:18px}.lives{font-size:18px;letter-spacing:2px}
+  .brand{position:absolute;top:max(58px,calc(env(safe-area-inset-top) + 52px));left:0;right:0;text-align:center;font-weight:800;letter-spacing:2px;font-size:13px;color:rgba(255,255,255,.7);pointer-events:none}
+  .controls{position:absolute;left:12px;right:12px;bottom:max(12px,env(safe-area-inset-bottom));height:82px;display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  button{border:1px solid rgba(255,255,255,.2);border-radius:24px;background:rgba(255,255,255,.11);color:#fff;font-size:22px;font-weight:800;backdrop-filter:blur(14px);box-shadow:0 10px 35px rgba(0,0,0,.22);touch-action:none}
+  button:active{transform:scale(.97);background:rgba(255,255,255,.18)}
+  .overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(3,10,18,.48);backdrop-filter:blur(7px)}
+  .card{width:min(390px,100%);padding:28px;border:1px solid rgba(255,255,255,.18);border-radius:30px;background:rgba(13,28,45,.78);box-shadow:0 20px 70px rgba(0,0,0,.4);text-align:center}
+  .card h1{margin:0 0 8px;font-size:34px}.card p{margin:8px 0 22px;color:rgba(255,255,255,.72);line-height:1.45}
+  .start{width:100%;height:58px;background:linear-gradient(135deg,#4c8dff,#7d5cff);border:0;font-size:18px}
+  .hint{font-size:13px;color:rgba(255,255,255,.52);margin-top:14px}
+  .hidden{display:none}
+</style>
+</head>
+<body>
+<div id="game">
+  <canvas id="c"></canvas>
+
+  <div class="hud">
+    <div class="pill score">СЧЁТ <span id="score">0</span></div>
+    <div class="pill lives" id="lives">❤️❤️❤️</div>
+  </div>
+  <div class="brand">MADEN • AUTOSLALOM</div>
+
+  <div class="controls">
+    <button id="left" aria-label="Влево">◀</button>
+    <button id="right" aria-label="Вправо">▶</button>
+  </div>
+
+  <div class="overlay" id="menu">
+    <div class="card">
+      <h1>🚗 AutoSlalom</h1>
+      <p>Лавируй между препятствиями на четырёх дорожках.<br>За каждое пройденное препятствие — +1 очко.</p>
+      <button class="start" id="start">НАЧАТЬ ИГРУ</button>
+      <div class="hint">200 очков → восстановление попытки</div>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+  const game = document.getElementById('game');
+  const scoreEl = document.getElementById('score');
+  const livesEl = document.getElementById('lives');
+  const menu = document.getElementById('menu');
+  const startBtn = document.getElementById('start');
+
+  let W=0,H=0,dpr=1, last=0, raf=0;
+  let running=false, score=0, lives=3, speed=0.33;
+  let playerLane=1, obstacles=[], spawnTimer=0, roadScroll=0;
+  let best=Number(localStorage.getItem('maden_autoslalom_best')||0);
+  let flash=0, shake=0;
+
+  function resize(){
+    const r=game.getBoundingClientRect();
+    W=r.width; H=r.height; dpr=Math.min(devicePixelRatio||1,2);
+    canvas.width=Math.floor(W*dpr); canvas.height=Math.floor(H*dpr);
+    canvas.style.width=W+'px'; canvas.style.height=H+'px';
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+  }
+  addEventListener('resize',resize); resize();
+
+  const road = () => {
+    const topY = H*.14, bottomY = H*.88;
+    const topW = W*.40, bottomW = W*.94;
+    return {topY,bottomY,topW,bottomW,cx:W/2};
+  };
+
+  function laneX(lane, y){
+    const r=road();
+    const t=(y-r.topY)/(r.bottomY-r.topY);
+    const width=r.topW+(r.bottomW-r.topW)*Math.max(0,Math.min(1,t));
+    return r.cx-width/2 + width*(lane+.5)/4;
+  }
+  function laneWidth(y){
+    const r=road(), t=(y-r.topY)/(r.bottomY-r.topY);
+    return (r.topW+(r.bottomW-r.topW)*Math.max(0,Math.min(1,t)))/4;
+  }
+
+  function roundRect(x,y,w,h,rad){
+    ctx.beginPath();ctx.roundRect(x,y,w,h,rad);ctx.fill();
+  }
+
+  function drawBackground(){
+    const g=ctx.createLinearGradient(0,0,0,H);
+    g.addColorStop(0,'#091827'); g.addColorStop(.55,'#12304a'); g.addColorStop(1,'#07111b');
+    ctx.fillStyle=g;ctx.fillRect(0,0,W,H);
+
+    // distant glow
+    const glow=ctx.createRadialGradient(W*.5,H*.2,10,W*.5,H*.2,W*.65);
+    glow.addColorStop(0,'rgba(79,150,255,.18)');glow.addColorStop(1,'rgba(79,150,255,0)');
+    ctx.fillStyle=glow;ctx.fillRect(0,0,W,H);
+
+    // roadside
+    ctx.fillStyle='#0a1c19';ctx.fillRect(0,0,W,H);
+    const r=road();
+    ctx.fillStyle='#0e2938';
+    ctx.beginPath();
+    ctx.moveTo(W/2-r.topW/2,r.topY);ctx.lineTo(W/2+r.topW/2,r.topY);
+    ctx.lineTo(W/2+r.bottomW/2,r.bottomY);ctx.lineTo(W/2-r.bottomW/2,r.bottomY);ctx.closePath();ctx.fill();
+
+    // road surface
+    const rg=ctx.createLinearGradient(0,r.topY,0,r.bottomY);
+    rg.addColorStop(0,'#2b3541');rg.addColorStop(1,'#111923');
+    ctx.fillStyle=rg;
+    ctx.beginPath();
+    ctx.moveTo(W/2-r.topW/2,r.topY);ctx.lineTo(W/2+r.topW/2,r.topY);
+    ctx.lineTo(W/2+r.bottomW/2,r.bottomY);ctx.lineTo(W/2-r.bottomW/2,r.bottomY);ctx.closePath();ctx.fill();
+
+    // edge lines
+    ctx.strokeStyle='rgba(110,190,255,.65)';ctx.lineWidth=3;
+    ctx.beginPath();ctx.moveTo(W/2-r.topW/2,r.topY);ctx.lineTo(W/2-r.bottomW/2,r.bottomY);
+    ctx.moveTo(W/2+r.topW/2,r.topY);ctx.lineTo(W/2+r.bottomW/2,r.bottomY);ctx.stroke();
+
+    // lane separators, perspective dashes
+    const dashLen=42, gap=38;
+    for(let lane=1;lane<4;lane++){
+      let y=r.topY+((roadScroll*2)% (dashLen+gap))-dashLen;
+      while(y<r.bottomY){
+        const y2=Math.min(y+dashLen,r.bottomY);
+        const x=laneX(lane-0.5,y);
+        const x2=laneX(lane-0.5,y2);
+        const lw=Math.max(1.5,laneWidth(y)*.045);
+        ctx.strokeStyle='rgba(235,241,248,.33)';ctx.lineWidth=lw;
+        ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(x2,y2);ctx.stroke();
+        y+=dashLen+gap;
+      }
+    }
+
+    // roadside chevrons
+    for(let i=0;i<8;i++){
+      const yy=r.topY+((i*120+roadScroll*2)% (r.bottomY-r.topY));
+      const t=(yy-r.topY)/(r.bottomY-r.topY);
+      const sideW=r.topW/2+(r.bottomW/2-r.topW/2)*t;
+      const size=5+18*t;
+      ctx.fillStyle='rgba(255,190,70,.65)';
+      ctx.beginPath();ctx.arc(W/2-sideW-size,yy,size*.35,0,Math.PI*2);ctx.fill();
+      ctx.beginPath();ctx.arc(W/2+sideW+size,yy,size*.35,0,Math.PI*2);ctx.fill();
+    }
+  }
+
+  function drawCar(){
+    const y=H*.76;
+    const lw=laneWidth(y);
+    const x=laneX(playerLane,y);
+    const w=Math.min(lw*.62,78), h=w*1.38;
+    ctx.save();
+    if(shake>0) ctx.translate((Math.random()-.5)*shake,(Math.random()-.5)*shake);
+    // shadow
+    ctx.fillStyle='rgba(0,0,0,.45)';ctx.beginPath();ctx.ellipse(x,y+h*.42,w*.55,8,0,0,Math.PI*2);ctx.fill();
+    // glow
+    const glow=ctx.createRadialGradient(x,y,4,x,y,w);
+    glow.addColorStop(0,'rgba(80,170,255,.45)');glow.addColorStop(1,'rgba(80,170,255,0)');
+    ctx.fillStyle=glow;ctx.beginPath();ctx.arc(x,y,w,0,Math.PI*2);ctx.fill();
+    // body
+    const body=ctx.createLinearGradient(x-w/2,y-h/2,x+w/2,y+h/2);
+    body.addColorStop(0,'#8fd4ff');body.addColorStop(.45,'#357cff');body.addColorStop(1,'#213bba');
+    ctx.fillStyle=body;roundRect(x-w/2,y-h/2,w,h,w*.22);
+    // windshield
+    ctx.fillStyle='rgba(8,24,43,.82)';roundRect(x-w*.32,y-h*.28,w*.64,h*.27,w*.1);
+    // lights
+    ctx.fillStyle='#fff4c7';roundRect(x-w*.35,y-h*.43,w*.22,h*.1,w*.04);
+    roundRect(x+w*.13,y-h*.43,w*.22,h*.1,w*.04);
+    ctx.fillStyle='#ff4d65';roundRect(x-w*.35,y+h*.31,w*.22,h*.08,w*.03);
+    roundRect(x+w*.13,y+h*.31,w*.22,h*.08,w*.03);
+    ctx.restore();
+  }
+
+  function drawObstacle(o){
+    const y=o.y, x=laneX(o.lane,y), s=Math.max(16,laneWidth(y)*.48);
+    ctx.save();
+    ctx.translate(x,y);
+    ctx.rotate(Math.sin(o.phase)*.025);
+    ctx.shadowBlur=16;ctx.shadowColor='rgba(255,80,70,.45)';
+    const grad=ctx.createLinearGradient(-s/2,-s/2,s/2,s/2);
+    grad.addColorStop(0,'#ffcf66');grad.addColorStop(.5,'#ff704f');grad.addColorStop(1,'#d93652');
+    ctx.fillStyle=grad;roundRect(-s/2,-s*.52,s,s*1.04,s*.14);
+    ctx.shadowBlur=0;
+    ctx.fillStyle='rgba(20,24,30,.72)';
+    for(let i=-1;i<2;i++){
+      ctx.save();ctx.rotate(-.45);ctx.fillRect(-s*.52+i*s*.48,-s*.15,s*.22,s*.82);ctx.restore();
+    }
+    ctx.restore();
+  }
+
+  function spawn(){
+    // usually one obstacle, occasionally a pair leaving at least one safe lane
+    const lane=Math.floor(Math.random()*4);
+    obstacles.push({lane,y:road().topY-35,passed:false,phase:Math.random()*6.28});
+    if(score>40 && Math.random()<.18){
+      let lane2=Math.floor(Math.random()*4);
+      if(lane2===lane) lane2=(lane2+1)%4;
+      obstacles.push({lane:lane2,y:road().topY-150,passed:false,phase:Math.random()*6.28});
+    }
+  }
+
+  function hit(o){
+    const playerY=H*.76;
+    return o.lane===playerLane && Math.abs(o.y-playerY)<Math.max(28,laneWidth(playerY)*.62);
+  }
+
+  function update(dt){
+    const r=road();
+    roadScroll=(roadScroll+dt*(80+speed*140))%1000;
+    spawnTimer-=dt;
+    if(spawnTimer<=0){
+      spawn();
+      spawnTimer=Math.max(.38,1.02-speed*.12)* (0.8+Math.random()*.35);
+    }
+    for(let i=obstacles.length-1;i>=0;i--){
+      const o=obstacles[i];
+      o.y += dt*(115+speed*120)*(1+o.y/r.bottomY*.7);
+      o.phase += dt*2;
+      if(!o.passed && o.y>H*.76+38){
+        o.passed=true;score++;
+        scoreEl.textContent=score;
+        if(score%200===0 && lives<3) lives++;
+        updateLives();
+        speed=Math.min(1.45,speed+.018);
+      }
+      if(hit(o) && !o.hit){
+        o.hit=true;
+        lives--; updateLives(); flash=.28; shake=12;
+        obstacles=obstacles.filter(x=>x!==o);
+        if(lives<=0){ endGame(); return; }
+      }
+      if(o.y>H+100) obstacles.splice(i,1);
+    }
+    if(flash>0)flash-=dt;
+    if(shake>0)shake=Math.max(0,shake-dt*40);
+  }
+
+  function updateLives(){
+    livesEl.textContent='❤️'.repeat(lives)+'🖤'.repeat(3-lives);
+  }
+
+  function render(){
+    drawBackground();
+    obstacles.sort((a,b)=>a.y-b.y).forEach(drawObstacle);
+    drawCar();
+    if(flash>0){
+      ctx.fillStyle=`rgba(255,60,60,${Math.min(.35,flash*1.4)})`;
+      ctx.fillRect(0,0,W,H);
+    }
+  }
+
+  function loop(t){
+    const dt=Math.min(.035,(t-last)/1000||0); last=t;
+    if(running) update(dt);
+    render();
+    raf=requestAnimationFrame(loop);
+  }
+
+  function startGame(){
+    score=0;lives=3;speed=.33;playerLane=1;obstacles=[];spawnTimer=.4;roadScroll=0;
+    scoreEl.textContent='0';updateLives();running=true;menu.classList.add('hidden');
+  }
+
+  function endGame(){
+    running=false;
+    best=Math.max(best,score);localStorage.setItem('maden_autoslalom_best',best);
+    menu.querySelector('h1').textContent='💥 Игра окончена';
+    menu.querySelector('p').innerHTML=`Счёт: <b>${score}</b><br>Рекорд: <b>${best}</b>`;
+    startBtn.textContent='ИГРАТЬ СНОВА';
+    menu.classList.remove('hidden');
+  }
+
+  function move(dir){
+    if(!running)return;
+    playerLane=Math.max(0,Math.min(3,playerLane+dir));
+  }
+
+  startBtn.addEventListener('click',startGame);
+  document.getElementById('left').addEventListener('pointerdown',e=>{e.preventDefault();move(-1)});
+  document.getElementById('right').addEventListener('pointerdown',e=>{e.preventDefault();move(1)});
+  addEventListener('keydown',e=>{
+    if(e.key==='ArrowLeft'||e.key.toLowerCase()==='a')move(-1);
+    if(e.key==='ArrowRight'||e.key.toLowerCase()==='d')move(1);
+    if(e.key===' '&&!running)startGame();
+  });
+
+  updateLives();
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>

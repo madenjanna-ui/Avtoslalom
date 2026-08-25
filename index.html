@@ -21,7 +21,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
 .controls{position:absolute;z-index:7;left:16px;right:16px;bottom:max(15px,env(safe-area-inset-bottom));display:flex;justify-content:space-between;pointer-events:none}
 .control{pointer-events:auto;width:92px;height:72px;border-radius:24px;border:1px solid #ffffff35;background:#07111caa;color:#fff;font-size:35px;font-weight:900;backdrop-filter:blur(12px);box-shadow:0 12px 35px #0007;touch-action:none}
 .control:active{transform:scale(.96);background:#ffffff1b}
-.overlay{position:absolute;z-index:20;inset:0;display:flex;align-items:center;justify-content:center;padding:20px;background:#02060db5;backdrop-filter:blur(10px)}
+.overlay{position:absolute;z-index:100;inset:0;display:flex;align-items:center;justify-content:center;padding:20px;background:#02060db5;backdrop-filter:blur(10px)}
 .card{width:min(430px,100%);padding:26px;border-radius:30px;border:1px solid #ffffff25;background:#0a1828e8;box-shadow:0 25px 90px #0009;text-align:center}
 .logo{font-weight:1000;letter-spacing:2px;font-size:27px}
 .logo span{color:#ff473f}
@@ -30,7 +30,7 @@ canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
 .row{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:8px 0 15px}
 .choice{border:1px solid #ffffff17;border-radius:15px;background:#ffffff0b;color:white;padding:12px 4px;font-weight:800}
 .choice.selected{background:#3f85ff45;border-color:#6fa4ff}
-.start{width:100%;height:56px;border:0;border-radius:18px;background:linear-gradient(135deg,#ff4b43,#d21e37);color:white;font-size:17px;font-weight:900;box-shadow:0 10px 30px #e1263740}
+.start{position:relative;z-index:101;pointer-events:auto;touch-action:manipulation;width:100%;height:56px;border:0;border-radius:18px;background:linear-gradient(135deg,#ff4b43,#d21e37);color:white;font-size:17px;font-weight:900;box-shadow:0 10px 30px #e1263740}
 .small{font-size:11px;color:#6f8093;margin-top:12px}
 .hidden{display:none!important}
 </style>
@@ -440,7 +440,8 @@ function render(){
 }
 
 function startGame(){
- initAudio();if(audioCtx.state==='suspended')audioCtx.resume();
+ try{initAudio();if(audioCtx && audioCtx.state==='suspended')audioCtx.resume()}catch(e){console.warn('Audio disabled:',e)}
+
  score=0;lives=3;lane=1;scroll=0;speed=1;spawnTimer=0.35;coneDamage=0;traffic=[];obstacles=[];particles=[];flash=0;shake=0;crashLock=false;
  scoreEl.textContent='0';updateLives();recordEl.textContent=best;damageEl.textContent='КОНУСЫ 0 / 3';damageEl.style.opacity=0;
  title.textContent='AUTO SLALOM';desc.textContent='Четыре полосы. Машины навстречу, конусы и дорожные препятствия. Три удара конусами — авария.';
@@ -459,7 +460,9 @@ document.querySelectorAll('#difficulty .choice').forEach(b=>b.onclick=()=>{
 document.querySelectorAll('#weather .choice').forEach(b=>b.onclick=()=>{
  document.querySelectorAll('#weather .choice').forEach(x=>x.classList.remove('selected'));b.classList.add('selected');weather=b.dataset.v
 });
-startBtn.onclick=startGame;
+startBtn.addEventListener('click', (e)=>{e.preventDefault();e.stopPropagation();startGame()});
+startBtn.addEventListener('touchend', (e)=>{e.preventDefault();e.stopPropagation();startGame()},{passive:false});
+
 document.getElementById('left').onpointerdown=e=>{e.preventDefault();move(-1)};
 document.getElementById('right').onpointerdown=e=>{e.preventDefault();move(1)};
 pauseBtn.onclick=()=>{if(!running)return;paused=!paused;pauseBtn.textContent=paused?'▶':'Ⅱ'};
@@ -468,7 +471,9 @@ addEventListener('keydown',e=>{
  if(e.key==='ArrowRight'||e.key.toLowerCase()==='d')move(1);
  if(e.key===' '&&!running)startGame();
 });
-recordEl.textContent=best;updateLives();requestAnimationFrame(function loop(t){const dt=Math.min(.035,(t-last)/1000||0);last=t;if(running&&!paused)update(dt);render();requestAnimationFrame(loop)});
+recordEl.textContent=best;updateLives();
+window.addEventListener('error',e=>console.warn('Game error:',e.error||e.message));
+requestAnimationFrame(function loop(t){const dt=Math.min(.035,(t-last)/1000||0);last=t;if(running&&!paused)update(dt);render();requestAnimationFrame(loop)});
 })();
 </script>
 </body>
